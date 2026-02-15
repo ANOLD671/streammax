@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>StreamMax Telegram IPTV</title>
+
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
+<style>
+body {
+    margin: 0;
+    background: #000;
+    color: white;
+    font-family: Arial;
+}
+
+#channelList {
+    height: 50vh;
+    overflow-y: auto;
+    border-bottom: 1px solid #333;
+}
+
+.channel {
+    padding: 12px;
+    border-bottom: 1px solid #222;
+    cursor: pointer;
+}
+
+.channel:hover {
+    background: #111;
+}
+
+video {
+    width: 100%;
+    height: 50vh;
+    background: black;
+}
+</style>
+</head>
+
+<body>
+
+<div id="channelList">Loading channels...</div>
+<video id="video" controls autoplay></video>
+
+<script>
+
+const tg = window.Telegram.WebApp;
+tg.expand();
+
+const M3U_URL = "https://iptv-org.github.io/iptv/index.m3u";
+const channelListDiv = document.getElementById("channelList");
+const video = document.getElementById("video");
+
+async function loadChannels() {
+    try {
+        const response = await fetch(M3U_URL);
+        const text = await response.text();
+        const channels = parseM3U(text);
+        displayChannels(channels);
+    } catch (err) {
+        channelListDiv.innerHTML = "Failed to load channels.";
+    }
+}
+
+function parseM3U(content) {
+    const lines = content.split("\n");
+    const channels = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].startsWith("#EXTINF")) {
+            const name = lines[i].split(",").pop().trim();
+            const url = lines[i + 1]?.trim();
+            if (url && url.startsWith("http")) {
+                channels.push({ name, url });
+            }
+        }
+    }
+
+    return channels;
+}
+
+function displayChannels(channels) {
+    channelListDiv.innerHTML = "";
+
+    channels.forEach(channel => {
+        const div = document.createElement("div");
+        div.className = "channel";
+        div.textContent = channel.name;
+
+        div.onclick = () => playStream(channel.url);
+
+        channelListDiv.appendChild(div);
+    });
+}
+
+function playStream(url) {
+
+    if (Hls.isSupported()) {
+        const hls = new Hls();
+        hls.loadSource(url);
+        hls.attachMedia(video);
+    } else {
+        video.src = url;
+    }
+}
+
+loadChannels();
+
+</script>
+
+</body>
+</html>
