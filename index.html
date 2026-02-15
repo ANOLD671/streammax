@@ -3,37 +3,105 @@
 <head>
 <meta charset="UTF-8">
 <title>StreamMax Telegram IPTV</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 
 <style>
-body {
-    margin: 0;
-    background: #000;
-    color: white;
-    font-family: Arial;
+:root {
+    --bg: #0e0e0e;
+    --card: #1a1a1a;
+    --accent: #00c3ff;
 }
 
+body {
+    margin: 0;
+    background: var(--bg);
+    color: white;
+    font-family: Arial, sans-serif;
+}
+
+/* Top */
+#topBar {
+    padding: 10px;
+    background: #111;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+input, select {
+    padding: 12px;
+    background: var(--card);
+    border: none;
+    color: white;
+    border-radius: 10px;
+    font-size: 18px;
+}
+
+/* Tabs */
+#tabs {
+    display: flex;
+    gap: 10px;
+}
+
+.tab {
+    padding: 10px 15px;
+    background: var(--card);
+    border-radius: 25px;
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.tab.active {
+    background: var(--accent);
+    color: black;
+}
+
+/* Channel List */
 #channelList {
-    height: 50vh;
+    height: 45vh;
     overflow-y: auto;
-    border-bottom: 1px solid #333;
+    padding: 10px;
 }
 
 .channel {
-    padding: 12px;
-    border-bottom: 1px solid #222;
+    padding: 18px;
+    background: var(--card);
+    margin-bottom: 10px;
+    border-radius: 12px;
     cursor: pointer;
+    font-size: 22px;   /* BIGGER FONT */
+    font-weight: bold;
 }
 
 .channel:hover {
-    background: #111;
+    background: #2a2a2a;
 }
 
+/* Messages */
+#message {
+    text-align: center;
+    padding: 10px;
+    font-size: 18px;
+}
+
+/* Fullscreen Button */
+#fullscreenBtn {
+    width: 100%;
+    padding: 14px;
+    font-size: 18px;
+    background: var(--accent);
+    border: none;
+    color: black;
+    font-weight: bold;
+}
+
+/* Video */
 video {
     width: 100%;
-    height: 50vh;
+    height: 40vh;
     background: black;
 }
 </style>
@@ -41,29 +109,58 @@ video {
 
 <body>
 
+<div id="topBar">
+    <input type="text" id="searchInput" placeholder="Search channel...">
+    <select id="countryFilter">
+        <option value="all">All Countries</option>
+    </select>
+
+    <div id="tabs">
+        <div class="tab active" data-type="all">All</div>
+        <div class="tab" data-type="favorites">Favorites</div>
+    </div>
+</div>
+
 <div id="channelList">Loading channels...</div>
-<video id="video" controls autoplay></video>
+
+<button id="fullscreenBtn">FULL SCREEN</button>
+
+<div id="message"></div>
+
+<video id="video" controls autoplay playsinline></video>
 
 <script>
-
 const tg = window.Telegram.WebApp;
 tg.expand();
 
 const M3U_URL = "https://iptv-org.github.io/iptv/index.m3u";
+
 const channelListDiv = document.getElementById("channelList");
 const video = document.getElementById("video");
+const searchInput = document.getElementById("searchInput");
+const countryFilter = document.getElementById("countryFilter");
+const message = document.getElementById("message");
 
+let allChannels = [];
+let currentTab = "all";
+let hls = null;
+let renderIndex = 0;
+const RENDER_BATCH = 50;
+
+/* FAST LOAD */
 async function loadChannels() {
     try {
         const response = await fetch(M3U_URL);
         const text = await response.text();
-        const channels = parseM3U(text);
-        displayChannels(channels);
-    } catch (err) {
+        allChannels = parseM3U(text);
+        populateCountries();
+        displayChannels();
+    } catch {
         channelListDiv.innerHTML = "Failed to load channels.";
     }
 }
 
+/* PARSE */
 function parseM3U(content) {
     const lines = content.split("\n");
     const channels = [];
@@ -72,42 +169,169 @@ function parseM3U(content) {
         if (lines[i].startsWith("#EXTINF")) {
             const name = lines[i].split(",").pop().trim();
             const url = lines[i + 1]?.trim();
+            const countryMatch = lines[i].match(/tvg-country="(.*?)"/);
+            const country = countryMatch ? countryMatch[1] : "Unknown";
+
             if (url && url.startsWith("http")) {
-                channels.push({ name, url });
+                channels.push({ name, url, country });
             }
         }
     }
-
     return channels;
 }
 
-function displayChannels(channels) {
+/* DISPLAY (FAST BATCH RENDERING) */
+function displayChannels() {
     channelListDiv.innerHTML = "";
+    renderIndex = 0;
 
-    channels.forEach(channel => {
-        const div = document.createElement("div");
-        div.className = "channel";
-        div.textContent = channel.name;
-
-        div.onclick = () => playStream(channel.url);
-
-        channelListDiv.appendChild(div);
-    });
+    const filtered = getFilteredChannels();
+    renderBatch(filtered);
 }
 
-function playStream(url) {
+function renderBatch(filtered) {
+    const end = renderIndex + RENDER_BATCH;
+    const favs = getFavorites();
 
-    if (Hls.isSupported()) {
-        const hls = new Hls();
-        hls.loadSource(url);
-        hls.attachMedia(video);
-    } else {
-        video.src = url;
+    for (let i = renderIndex; i < end && i < filtered.length; i++) {
+        const ch = filtered[i];
+
+        const div = document.createElement("div");
+        div.className = "channel";
+        div.textContent = ch.name;
+
+        if (favs.includes(ch.url)) {
+            div.style.color = "#00c3ff";
+        }
+
+        div.onclick = () => playStream(ch.url);
+
+        /* RIGHT CLICK */
+        div.oncontextmenu = (e) => {
+            e.preventDefault();
+            toggleFavorite(ch.url);
+            displayChannels();
+        };
+
+        /* LONG PRESS MOBILE */
+        let pressTimer;
+        div.ontouchstart = () => {
+            pressTimer = setTimeout(() => {
+                toggleFavorite(ch.url);
+                displayChannels();
+            }, 600);
+        };
+        div.ontouchend = () => clearTimeout(pressTimer);
+
+        channelListDiv.appendChild(div);
+    }
+
+    renderIndex = end;
+
+    if (renderIndex < filtered.length) {
+        requestAnimationFrame(() => renderBatch(filtered));
     }
 }
 
-loadChannels();
+/* FILTER */
+function getFilteredChannels() {
+    return allChannels.filter(ch => {
 
+        if (currentTab === "favorites") {
+            if (!getFavorites().includes(ch.url)) return false;
+        }
+
+        if (countryFilter.value !== "all" && ch.country !== countryFilter.value)
+            return false;
+
+        if (!ch.name.toLowerCase().includes(searchInput.value.toLowerCase()))
+            return false;
+
+        return true;
+    });
+}
+
+/* PLAY FAST + ERROR HANDLING */
+function playStream(url) {
+
+    message.innerHTML = "Please wait... Loading stream";
+
+    if (hls) {
+        hls.destroy();
+        hls = null;
+    }
+
+    if (Hls.isSupported()) {
+        hls = new Hls({
+            maxBufferLength: 5,
+            enableWorker: true,
+            lowLatencyMode: true
+        });
+
+        hls.loadSource(url);
+        hls.attachMedia(video);
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            message.innerHTML = "";
+            video.play();
+        });
+
+        hls.on(Hls.Events.ERROR, () => {
+            message.innerHTML = "⚠️ Error: Stream failed to broadcast.";
+        });
+
+    } else {
+        video.src = url;
+        video.onloadeddata = () => message.innerHTML = "";
+        video.onerror = () => message.innerHTML = "⚠️ Error: Stream failed.";
+    }
+}
+
+/* FAVORITES */
+function getFavorites() {
+    return JSON.parse(localStorage.getItem("favorites") || "[]");
+}
+
+function toggleFavorite(url) {
+    let favs = getFavorites();
+    if (favs.includes(url))
+        favs = favs.filter(f => f !== url);
+    else
+        favs.push(url);
+
+    localStorage.setItem("favorites", JSON.stringify(favs));
+}
+
+/* COUNTRIES */
+function populateCountries() {
+    const countries = [...new Set(allChannels.map(ch => ch.country))];
+    countries.sort().forEach(c => {
+        const option = document.createElement("option");
+        option.value = c;
+        option.textContent = c;
+        countryFilter.appendChild(option);
+    });
+}
+
+/* FULLSCREEN */
+document.getElementById("fullscreenBtn").onclick = () => {
+    if (video.requestFullscreen) video.requestFullscreen();
+};
+
+/* EVENTS */
+searchInput.oninput = displayChannels;
+countryFilter.onchange = displayChannels;
+
+document.querySelectorAll(".tab").forEach(tab => {
+    tab.onclick = () => {
+        document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        currentTab = tab.dataset.type;
+        displayChannels();
+    };
+});
+
+loadChannels();
 </script>
 
 </body>
